@@ -2,6 +2,7 @@ import os
 import re
 import json
 import hashlib
+import unicodedata
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,8 @@ dataset_path = kagglehub.dataset_download("algozee/cyber-security")
 
 print("path to dataset files:", dataset_path)
 
-bronze_path = Path("data/bronze")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+bronze_path = PROJECT_ROOT / "data" / "bronze"
 bronze_path.mkdir(parents=True, exist_ok=True)
 
 
@@ -21,12 +23,9 @@ bronze_path.mkdir(parents=True, exist_ok=True)
 
 def _to_snake_case(name: str) -> str:
     """Converte um nome de coluna para snake_case sem acentos/caracteres especiais."""
-    # Mapa de caracteres acentuados para equivalentes ASCII
-    accent_map = str.maketrans(
-        "áàãâäéèêëíìîïóòõôöúùûüçñÁÀÃÂÄÉÈÊËÍÌÎÏÓÒÕÔÖÚÙÛÜÇÑ",
-        "aaaaaaeeeeiiiiooooouuuucnAAAAEEEEIIIIOOOOUUUUCN"
-    )
-    name = name.translate(accent_map)
+    # Decompõe em forma NFD e descarta os caracteres combinantes (diacríticos)
+    name = unicodedata.normalize("NFD", name)
+    name = "".join(c for c in name if not unicodedata.combining(c))
     # Substitui espaços e hífens por underscore
     name = re.sub(r"[\s\-]+", "_", name)
     # Insere underscore entre CamelCase (ex: "AttackVector" → "Attack_Vector")
@@ -49,7 +48,7 @@ def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# 1.3 — Metadados de ingestão
+# 1.2 — Metadados de ingestão
 # ---------------------------------------------------------------------------
 
 metadata_file = bronze_path / "metadata.json"
@@ -137,6 +136,11 @@ def save_parquet(df: pd.DataFrame, file_name: str, source_path: str) -> None:
 def run_pipeline():
     print("starting ingestion...")
 
+    bronze_path.mkdir(parents=True, exist_ok=True)
+
+    dataset_path = kagglehub.dataset_download("algozee/cyber-security")
+    print(f"dataset path: {dataset_path}")
+
     for root, dirs, files in os.walk(dataset_path):
         for file in files:
             full_path = os.path.join(root, file)
@@ -148,7 +152,7 @@ def run_pipeline():
             print(f"\n  [1.1] padronizando colunas de {file}...")
             df = standardize_columns(df)
 
-            print(f"  [1.3] registrando metadados de {file}...")
+            print(f"  [1.2] registrando metadados de {file}...")
             record_metadata(df, file, full_path)
 
             save_parquet(df, file, full_path)
@@ -156,5 +160,83 @@ def run_pipeline():
     print("\ningestion finished")
 
 
+# ---------------------------------------------------------------------------
+# 1.3 — Validação da ingestão
+# ---------------------------------------------------------------------------
+
+REQUIRED_METADATA_FIELDS = {
+    "nome_arquivo", "caminho_origem", "num_linhas", "num_colunas",
+    "hash_md5", "data_hora_carga", "colunas", "tipos",
+}
+
+
+def validate_ingestion() -> bool:
+    """Verifica se todos os passos da ingestão foram gerados corretamente."""
+    print("\n" + "=" * 60)
+    print("VALIDAÇÃO DE INGESTÃO")
+    print("=" * 60)
+    ok = True
+
+    # 1. Pasta bronze existe
+    if bronze_path.exists():
+        print(f"[OK] Pasta bronze existe: {bronze_path}")
+    else:
+        print(f"[FALHA] Pasta bronze não encontrada: {bronze_path}")
+        return False
+
+    # 2. Pelo menos um Parquet gerado
+    parquet_files = list(bronze_path.glob("*.parquet"))
+    if parquet_files:
+        print(f"[OK] {len(parquet_files)} arquivo(s) Parquet encontrado(s):")
+        for pf in parquet_files:
+            size_kb = pf.stat().st_size / 1024
+            print(f"     {pf.name}  ({size_kb:.1f} KB)")
+    else:
+        print("[FALHA] Nenhum arquivo Parquet encontrado em data/bronze/")
+        ok = False
+
+    # 3. metadata.json existe
+    if not metadata_file.exists():
+        print("[FALHA] metadata.json não encontrado")
+        return False
+    print(f"[OK] metadata.json encontrado")
+
+    # 4. metadata.json tem todos os campos obrigatórios em cada entrada
+    entries = _load_metadata()
+    if not entries:
+        print("[FALHA] metadata.json está vazio")
+        ok = False
+    else:
+        for entry in entries:
+            missing = REQUIRED_METADATA_FIELDS - set(entry.keys())
+            nome = entry.get('nome_arquivo', '(desconhecido)')
+            if missing:
+                print(f"[FALHA] Campos ausentes em '{nome}': {missing}")
+                ok = False
+            else:
+                print(f"[OK] Metadados completos para '{nome}' "
+                      f"({entry['num_linhas']} linhas, hash={entry['hash_md5']})")
+
+    # 5. Cada Parquet tem as colunas de lineage
+    for pf in parquet_files:
+        try:
+            df_check = pd.read_parquet(pf)
+            for col in ("ingestion_timestamp", "source_file"):
+                if col not in df_check.columns:
+                    print(f"[FALHA] Coluna '{col}' ausente em {pf.name}")
+                    ok = False
+            if ok:
+                print(f"[OK] Colunas de lineage presentes em {pf.name}")
+        except Exception as e:
+            print(f"[FALHA] Erro ao ler {pf.name}: {e}")
+            ok = False
+
+    print("=" * 60)
+    print("RESULTADO:", "PASSOU" if ok else "FALHOU")
+    print("=" * 60)
+    return ok
+
+
 if __name__ == "__main__":
     run_pipeline()
+    validate_ingestion()

@@ -22,3 +22,6 @@ venv/
 # 🔥 Parquet
 *.parquet
 EOL
+
+data/
+reports/

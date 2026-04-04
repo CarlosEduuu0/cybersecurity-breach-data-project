@@ -1,0 +1,4 @@
+pandas==3.0.2
+kagglehub==1.0.0
+pyspark==4.1.1
+pyarrow>=18.0.0

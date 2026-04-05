@@ -243,7 +243,7 @@ def check_categories(df: pd.DataFrame) -> list[dict]:
     n = len(df)
 
     cat_cols = [
-        c for c in df.select_dtypes(include=["object", "str"]).columns
+        c for c in df.select_dtypes(include=["object", "string"]).columns
         if not _CAT_EXCLUDE_PATTERN.search(c)
         and not _DATE_COL_PATTERN.search(c)  # datas já tratadas em check_dates
         and df[c].nunique() <= CATEGORICAL_MAX_UNIQUE
@@ -799,7 +799,7 @@ def validate_quality(results: list[dict]) -> bool:
                 print(f"[OK] Campos completos em '{r['dataset']}' | score={r['score']}/100 | status={r['status']}")
 
     # 3. Parquets validados foram gerados
-    validated_files = list(BRONZE_PATH.glob("*_validated.parquet"))
+    validated_files = list(BRONZE_PATH.rglob("*_validated.parquet"))
     if validated_files:
         for vf in validated_files:
             df_check = pd.read_parquet(vf)
@@ -811,7 +811,7 @@ def validate_quality(results: list[dict]) -> bool:
                 print(f"[FALHA] {vf.name} não tem coluna 'quality_flag'")
                 ok = False
     else:
-        print("[FALHA] Nenhum arquivo *_validated.parquet encontrado em data/bronze/")
+        print("[FALHA] Nenhum arquivo *_validated.parquet encontrado em data/bronze/ (incluindo subpastas)")
         ok = False
 
     print("=" * 60)
@@ -830,7 +830,22 @@ def run_quality() -> list[dict]:
     print("=" * 60)
 
     results = []
-    for pf in sorted(BRONZE_PATH.glob("*.parquet")):
+
+    input_files = [pf for pf in sorted(BRONZE_PATH.glob("*.parquet"))
+                   if not pf.stem.endswith("_validated")]
+
+    if not input_files:
+        dated_dirs = sorted([p for p in BRONZE_PATH.iterdir() if p.is_dir()]) if BRONZE_PATH.exists() else []
+        if dated_dirs:
+            latest_dir = dated_dirs[-1]
+            input_files = [pf for pf in sorted(latest_dir.glob("*.parquet"))
+                           if not pf.stem.endswith("_validated")]
+            print(f"[INFO] Usando partição Bronze mais recente: {latest_dir}")
+
+    if not input_files:
+        print("[AVISO] Nenhum arquivo parquet de entrada encontrado para validação.")
+
+    for pf in input_files:
         if pf.stem.endswith("_validated"):
             continue  # ignora arquivos de saída desta própria etapa
         print(f"\n>>> {pf.name}")
@@ -846,7 +861,7 @@ def run_quality() -> list[dict]:
 
         # 2.5 — Salva dataset com flags
         df_flagged = flag_dataset(df, result["findings"])
-        out_validated = BRONZE_PATH / (pf.stem + "_validated.parquet")
+        out_validated = pf.parent / (pf.stem + "_validated.parquet")
         df_flagged.to_parquet(out_validated, index=False)
         n_bad = (df_flagged["quality_flag"] != "OK").sum()
         print(f"    [2.5] validado salvo: {out_validated.name} | {n_bad} linha(s) flagada(s)")

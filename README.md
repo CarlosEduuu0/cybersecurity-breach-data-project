@@ -1,6 +1,6 @@
 # cybersecurity-breach-data-project
 
-Pipeline de engenharia de dados sobre um dataset de cibersegurança, organizado em camadas **Bronze** e **Silver**.
+Pipeline de engenharia de dados sobre dataset de cibersegurança, organizado em camadas **Bronze** e **Silver**.
 
 ---
 
@@ -9,15 +9,19 @@ Pipeline de engenharia de dados sobre um dataset de cibersegurança, organizado 
 ```
 cybersecurity-breach-data-project/
 ├── data/
-│   └── bronze/          # Parquets gerados pela ingestão + metadata.json
+│   ├── bronze/                    # Parquets da Bronze
+│   └── silver/                    # Parquet final da Silver
+├── docs/
+│   ├── silver_decisions.md        # Justificativas da Etapa 3
+│   └── anti_leakage_checklist.md  # Checklist anti-leakage
 ├── notebooks/
-│   └── exploracao_silver.ipynb   # Transformações da camada Silver (PySpark)
+│   └── exploracao_silver.ipynb    # Notebook principal da Etapa 3
 ├── reports/
-│   ├── quality_report.md         # Relatório de qualidade gerado automaticamente
-│   └── quality_report.json       # Idem, em JSON
+│   ├── quality_report.md          # Relatório da Etapa 2
+│   └── quality_report.json        # Relatório da Etapa 2 (JSON)
 ├── src/
-│   ├── ingestion.py     # Etapa 1 — Ingestão e camada Bronze
-│   └── quality.py       # Etapa 2 — Validação de qualidade
+│   ├── ingestion.py               # Etapa 1 — Bronze
+│   └── quality.py                 # Etapa 2 — Qualidade Bronze
 └── requirements.txt
 ```
 
@@ -80,11 +84,25 @@ python src/quality.py
 - `reports/quality_report.json` — idem em JSON
 - `data/bronze/*_validated.parquet` — Parquets com coluna `quality_flag`
 
-### Etapa 3 — Camada Silver (notebook PySpark)
+### Etapa 3 — Camada Silver + Transformações (Notebook PySpark)
+
+Executa a limpeza e preparação para Machine Learning:
+- trata nulos
+- remove duplicados
+- padroniza categorias
+- converte/trata datas
+- cria label final
+- remove colunas com risco de data leakage
+- gera documentação de decisões
 
 ```bash
 jupyter notebook notebooks/exploracao_silver.ipynb
 ```
+
+**Saída esperada:**
+- `data/silver/incidents_master.parquet`
+- `docs/silver_decisions.md`
+- `docs/anti_leakage_checklist.md`
 
 > Requer Java instalado para rodar o PySpark localmente.
 

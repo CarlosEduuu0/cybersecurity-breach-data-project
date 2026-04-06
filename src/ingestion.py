@@ -13,7 +13,9 @@ dataset_path = kagglehub.dataset_download("algozee/cyber-security")
 print("path to dataset files:", dataset_path)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-bronze_path = PROJECT_ROOT / "data" / "bronze"
+bronze_root_path = PROJECT_ROOT / "data" / "bronze"
+run_date = datetime.now().strftime("%Y-%m-%d")
+bronze_path = bronze_root_path / run_date
 bronze_path.mkdir(parents=True, exist_ok=True)
 
 
@@ -75,7 +77,7 @@ def _save_metadata(entries: list) -> None:
 
 
 def record_metadata(df: pd.DataFrame, file_name: str, source_path: str) -> None:
-    """Registra os metadados do arquivo ingerido em data/bronze/metadata.json."""
+    """Registra os metadados do arquivo ingerido em data/bronze/YYYY-MM-DD/metadata.json."""
     entry = {
         "nome_arquivo":   file_name,
         "caminho_origem": source_path,
@@ -100,6 +102,14 @@ def record_metadata(df: pd.DataFrame, file_name: str, source_path: str) -> None:
 # Carga e salvamento
 # ---------------------------------------------------------------------------
 
+def _normalize_output_file_name(file_name: str) -> str:
+    """Gera nome de saída padronizado (snake_case) para o Parquet da Bronze."""
+    stem = Path(file_name).stem
+    normalized_stem = _to_snake_case(stem)
+    if not normalized_stem:
+        normalized_stem = "dataset"
+    return f"{normalized_stem}.parquet"
+
 def load_file(file_path: str) -> pd.DataFrame | None:
     try:
         if file_path.endswith(".csv"):
@@ -118,7 +128,8 @@ def load_file(file_path: str) -> pd.DataFrame | None:
 
 
 def save_parquet(df: pd.DataFrame, file_name: str, source_path: str) -> None:
-    output_file = bronze_path / (Path(file_name).stem + ".parquet")
+    output_name = _normalize_output_file_name(file_name)
+    output_file = bronze_path / output_name
     # Colunas de lineage por linha — permitem rastrear origem diretamente no Parquet
     # sem depender do metadata.json. row_count/hash ficam só no JSON (redundantes por linha).
     df = df.assign(
@@ -137,6 +148,9 @@ def run_pipeline():
     print("starting ingestion...")
 
     bronze_path.mkdir(parents=True, exist_ok=True)
+    bronze_root_path.mkdir(parents=True, exist_ok=True)
+    print(f"bronze partition date: {run_date}")
+    print(f"bronze output path: {bronze_path}")
 
     dataset_path = kagglehub.dataset_download("algozee/cyber-security")
     print(f"dataset path: {dataset_path}")
@@ -177,11 +191,18 @@ def validate_ingestion() -> bool:
     print("=" * 60)
     ok = True
 
-    # 1. Pasta bronze existe
-    if bronze_path.exists():
-        print(f"[OK] Pasta bronze existe: {bronze_path}")
+    # 1. Pasta raiz da bronze existe
+    if bronze_root_path.exists():
+        print(f"[OK] Pasta bronze raiz existe: {bronze_root_path}")
     else:
-        print(f"[FALHA] Pasta bronze não encontrada: {bronze_path}")
+        print(f"[FALHA] Pasta bronze raiz não encontrada: {bronze_root_path}")
+        return False
+
+    # 1.1 Partição da execução existe
+    if bronze_path.exists():
+        print(f"[OK] Partição bronze da execução existe: {bronze_path}")
+    else:
+        print(f"[FALHA] Partição bronze da execução não encontrada: {bronze_path}")
         return False
 
     # 2. Pelo menos um Parquet gerado
@@ -192,14 +213,14 @@ def validate_ingestion() -> bool:
             size_kb = pf.stat().st_size / 1024
             print(f"     {pf.name}  ({size_kb:.1f} KB)")
     else:
-        print("[FALHA] Nenhum arquivo Parquet encontrado em data/bronze/")
+        print(f"[FALHA] Nenhum arquivo Parquet encontrado em {bronze_path}")
         ok = False
 
-    # 3. metadata.json existe
+    # 3. metadata.json da partição existe
     if not metadata_file.exists():
-        print("[FALHA] metadata.json não encontrado")
+        print(f"[FALHA] metadata.json não encontrado em {metadata_file}")
         return False
-    print(f"[OK] metadata.json encontrado")
+    print(f"[OK] metadata.json encontrado em {metadata_file}")
 
     # 4. metadata.json tem todos os campos obrigatórios em cada entrada
     entries = _load_metadata()

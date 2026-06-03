@@ -78,13 +78,14 @@ def _save_metadata(entries: list) -> None:
 
 def record_metadata(df: pd.DataFrame, file_name: str, source_path: str) -> None:
     """Registra os metadados do arquivo ingerido em data/bronze/YYYY-MM-DD/metadata.json."""
+    ingestion_dt = datetime.now().replace(microsecond=0)
     entry = {
         "nome_arquivo":   file_name,
         "caminho_origem": source_path,
         "num_linhas":     len(df),
         "num_colunas":    len(df.columns),
         "hash_md5":       _compute_hash(source_path),
-        "data_hora_carga": datetime.now().isoformat(),
+        "data_hora_carga": ingestion_dt.strftime("%Y-%m-%d %H:%M:%S"),
         "colunas":        list(df.columns),
         "tipos":          {col: str(dtype) for col, dtype in df.dtypes.items()},
     }
@@ -132,8 +133,9 @@ def save_parquet(df: pd.DataFrame, file_name: str, source_path: str) -> None:
     output_file = bronze_path / output_name
     # Colunas de lineage por linha — permitem rastrear origem diretamente no Parquet
     # sem depender do metadata.json. row_count/hash ficam só no JSON (redundantes por linha).
+    ingestion_dt = datetime.now().replace(microsecond=0)
     df = df.assign(
-        ingestion_timestamp=datetime.now(),
+        ingestion_timestamp=ingestion_dt,
         source_file=source_path,
     )
     df.to_parquet(output_file, index=False)

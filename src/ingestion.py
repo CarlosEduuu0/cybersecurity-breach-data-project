@@ -133,9 +133,8 @@ def save_parquet(df: pd.DataFrame, file_name: str, source_path: str) -> None:
     output_file = bronze_path / output_name
     # Colunas de lineage por linha — permitem rastrear origem diretamente no Parquet
     # sem depender do metadata.json. row_count/hash ficam só no JSON (redundantes por linha).
-    ingestion_dt = datetime.now().replace(microsecond=0)
     df = df.assign(
-        ingestion_timestamp=ingestion_dt,
+        ingestion_timestamp=str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         source_file=source_path,
     )
     df.to_parquet(output_file, index=False)

@@ -17,5 +17,6 @@ venv/
 
 data/
 reports/
-docs/
+docs/*
+!docs/quality_report_gold.md
 models/

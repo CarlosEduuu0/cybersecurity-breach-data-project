@@ -1,6 +1,6 @@
 # Cybersecurity Breach Data Project
 
-Pipeline de engenharia de dados sobre dataset de cibersegurança, organizado em camadas **Bronze** e **Silver**, com a inclusão de uma etapa final de **Análise Exploratória (EDA)**.
+Pipeline de engenharia de dados (arquitetura **medallion**) sobre o dataset Kaggle `algozee/cyber-security`, cobrindo o fluxo completo **Bronze → Quality → Silver → EDA → Gold (ML-ready) → Machine Learning**, com uma refatoração em **PySpark** para demonstrar escalabilidade. O resultado final é um dataset pronto para ML e modelos de Árvore de Decisão treinados e comparados (Silver vs Gold).
 
 ---
 
@@ -79,24 +79,63 @@ graph TD
     class QualityCheck,Regras,Report,ValidatedBronze quality;
 ```
 
+### Camada Ouro + Machine Learning + PySpark
+
+Continuação do fluxo a partir da Silver, até o dataset ML-ready, os modelos e a refatoração distribuída:
+
+```mermaid
+graph TD
+    Silver[(Silver Parquets)] --> GoldPipe[notebooks/gold_pipeline.ipynb]
+    GoldPipe --> SplitStrat[Split estratificado 80/20<br/>seed=42]
+    SplitStrat --> Preproc[ColumnTransformer<br/>OneHot + TargetEncoding<br/>Standard + Robust Scaling<br/>Imputação mediana + flags<br/>log1p + IQR clipping]
+    Preproc --> GoldDS[(data/gold/dataset_ml_ready.parquet)]
+    Preproc --> Joblib[(models/gold_preprocessor.joblib)]
+    GoldDS --> MLNB[notebooks/ml_models.ipynb]
+    MLNB --> Results[(reports/ml_results.md<br/>+ matrizes/árvores PNG)]
+    MLNB --> BestModel[(models/best_decision_tree.joblib)]
+
+    Silver --> SparkNB[notebooks/pyspark_refactor.ipynb]
+    SparkNB --> SparkJoin[(data/gold/spark_join.parquet)]
+    SparkNB --> SparkAgg[(data/gold/spark_agg_by_vector.parquet)]
+    SparkNB --> SparkTop5[(data/gold/spark_top5_per_year.parquet)]
+```
+
+> **Alvo de ML:** a EDA explora `label_severe_incident`; a Gold/ML usam o alvo de *dwell time*
+> (binário pela mediana de `days_to_discovery`, gravado como coluna `label`, ~51/49 balanceado).
+
 ---
 
 ## 📂 Estrutura de Pastas
 
+> **Nota:** `data/`, `reports/`, `docs/` e `models/` são **gitignored** — são saídas locais
+> reconstruídas ao rodar o pipeline, não versionadas.
+
 ```text
 cybersecurity-breach-data-project/
 ├── data/
-│   ├── bronze/                    # Dados originais no formato parquet padronizado + metadados
-│   └── silver/                    # Dados limpos e preparados para Machine Learning
+│   ├── bronze/                    # Parquet padronizado + metadata.json (particionado por data)
+│   ├── silver/                    # 3 datasets limpos, independentes (incidents/financial/market)
+│   └── gold/                      # dataset_ml_ready.parquet, market_retroactive + saídas PySpark
 ├── notebooks/
-│   ├── silver_pipeline.ipynb      # Notebook final consolidado da Camada Silver
-│   └── eda.ipynb                  # Notebook de Análise Exploratória (EDA)
-├── reports/
-│   ├── quality_report.md          # Relatório de qualidade dos dados da Etapa 2
-│   └── quality_report.json        # Relatório de qualidade em formato JSON
+│   ├── silver_pipeline.ipynb      # Etapa 3 — Camada Silver (limpeza, anti-leakage)
+│   ├── eda.ipynb                  # Etapa 4 — Análise Exploratória orientada a hipóteses
+│   ├── gold_pipeline.ipynb        # Etapa 5 — Join + pré-processamento ML-ready (sklearn)
+│   ├── ml_models.ipynb            # Etapa 6 — DecisionTrees Silver vs Gold + comparação
+│   ├── pyspark_refactor.ipynb     # Etapa 7 — Refatoração PySpark + benchmark vs Pandas
+│   └── 00_pipeline_completo.ipynb # Índice executável de todo o pipeline (ponta a ponta)
 ├── src/
-│   ├── ingestion.py               # Script da Etapa 1 — Extração para Bronze
-│   └── quality.py                 # Script da Etapa 2 — Testes de Qualidade
+│   ├── ingestion.py               # Etapa 1 — Extração/padronização para Bronze
+│   └── quality.py                 # Etapa 2 — Validação de qualidade dirigida por regras
+├── reports/
+│   ├── quality_report.{md,json}   # Relatório de qualidade da Etapa 2
+│   ├── ml_results.md              # Tabela comparativa + discussão dos modelos (Etapa 6)
+│   └── *.png                      # Matriz de confusão e árvore de decisão
+├── docs/
+│   ├── silver_decisions.md        # Decisões por coluna na Silver
+│   ├── gold_transformations.md    # Tabela de transformações da Gold
+│   ├── anti_leakage_checklist.md  # Checklist anti-leakage
+│   └── quality_report_gold.md     # Relatório de qualidade consolidado Prata + Ouro
+├── models/                        # gold_preprocessor.joblib, best_decision_tree.joblib
 └── requirements.txt               # Dependências do projeto
 ```
 
@@ -104,7 +143,10 @@ cybersecurity-breach-data-project/
 
 ## 🚀 Como Rodar o Projeto
 
-**1. Pré-requisitos:** Python 3.10+
+**1. Pré-requisitos:**
+- **Python 3.10+** (testado em 3.13).
+- **JDK 17 ou 21** apenas para a etapa PySpark (`notebooks/pyspark_refactor.ipynb`). O Spark 4.x **não** suporta Java 23+. Defina `JAVA_HOME` apontando para o JDK.
+- **Windows + PySpark:** baixe `winutils.exe` + `hadoop.dll` (Hadoop 3.x), coloque em `C:\hadoop\bin` e defina `HADOOP_HOME=C:\hadoop` (+ no `PATH`). Sem isso o Spark falha ao gravar Parquet.
 
 **2. Instalação e Ambiente Virtual:**
 ```bash
@@ -125,19 +167,35 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**3. Execução das Etapas:**
-- **Etapa 1 (Ingestão Bronze):** Baixa os dados brutos e salva em Parquet.
-  ```bash
-  python src/ingestion.py
-  ```
-- **Etapa 2 (Validação de Qualidade):** Verifica anomalias estatísticas e de negócio.
-  ```bash
-  python src/quality.py
-  ```
-- **Etapa 3 e 4 (Limpeza e EDA):**
-  Abra o VS Code, selecione o interpretador Python (`venv`) e execute os cadernos:
-  1. `notebooks/silver_pipeline.ipynb` (Aplica a limpeza baseada nos erros da qualidade)
-  2. `notebooks/eda.ipynb` (Gera gráficos e análises visuais)
+**3. Execução do pipeline completo (ponta a ponta):**
+
+Os scripts `src/*.py` rodam direto; os notebooks podem ser executados no VS Code (interpretador =
+`venv`, *Restart & Run All*) **ou** headless via `jupyter nbconvert`. Ordem obrigatória:
+
+```bash
+# Etapas 1–2 (scripts) — Bronze e Validação de Qualidade
+python src/ingestion.py
+python src/quality.py
+
+# Etapas 3–7 (notebooks) — Silver → EDA → Gold → ML → PySpark
+jupyter nbconvert --to notebook --execute --inplace notebooks/silver_pipeline.ipynb
+jupyter nbconvert --to notebook --execute --inplace notebooks/eda.ipynb
+jupyter nbconvert --to notebook --execute --inplace notebooks/gold_pipeline.ipynb
+jupyter nbconvert --to notebook --execute --inplace notebooks/ml_models.ipynb
+jupyter nbconvert --to notebook --execute --inplace notebooks/pyspark_refactor.ipynb
+```
+
+> Alternativa: abra `notebooks/00_pipeline_completo.ipynb`, que orquestra todas as etapas em ordem.
+
+| Etapa | Artefato | Saída principal |
+|-------|----------|-----------------|
+| 1 — Bronze | `src/ingestion.py` | `data/bronze/<data>/*.parquet` + `metadata.json` |
+| 2 — Quality | `src/quality.py` | `reports/quality_report.*` + `*_validated.parquet` |
+| 3 — Silver | `silver_pipeline.ipynb` | `data/silver/*_silver.parquet` |
+| 4 — EDA | `eda.ipynb` | gráficos + hipóteses |
+| 5 — Gold | `gold_pipeline.ipynb` | `data/gold/dataset_ml_ready.parquet` + `models/gold_preprocessor.joblib` |
+| 6 — ML | `ml_models.ipynb` | `reports/ml_results.md` + `models/best_decision_tree.joblib` |
+| 7 — PySpark | `pyspark_refactor.ipynb` | `data/gold/spark_*.parquet` + benchmark |
 
 ---
 
@@ -151,3 +209,11 @@ O checklist atendido na camada Silver elimina terminantemente:
 - [x] **`confidence_tier` e `review_flag`:** Eliminadas por serem averiguações de curadores avalistas externos após a submissão original do incidente cibernético.
 - [x] **`disclosure_date` (crua):** Extirpada e revertida exclusivamente à extração da diferença em dias (para não injetar tendências de datas exatas ao modelo).
 - [x] **`created_at` / `updated_at`:** Marcadores puramente do sistema onde o dado estava hospedado na Kaggle. Não servem como traços da anatomia de um ciberataque.
+
+E na **camada Gold**, antes do `fit`, removemos também:
+
+- [x] **Identificadores:** `incident_id`, `stock_ticker` (e a duplicata `stock_ticker_mkt` gerada no join).
+- [x] **Datas cruas:** `incident_date`, `discovery_date`, `incident_month`, `incident_day` — já resumidas em `days_to_discovery` / `days_to_disclosure`.
+- [x] **Variáveis pós-evento do mercado:** `price_1d_after`, `price_7d_after`, `price_30d_after`, `abnormal_return_*`, `car_*`, `post_incident_volatility_30d`, `days_to_price_recovery` — não observáveis antes do evento (leakage em tempo real). Preservadas à parte em `data/gold/market_retroactive.parquet` para análise retroativa.
+
+> Detalhamento completo em `docs/anti_leakage_checklist.md` e `docs/quality_report_gold.md`.

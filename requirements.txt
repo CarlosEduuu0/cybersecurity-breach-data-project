@@ -5,5 +5,5 @@ pyarrow==23.0.1
 numpy==2.4.4
 matplotlib==3.10.9
 seaborn==0.13.2
-scikit-learn
-joblib
+scikit-learn==1.9.0
+joblib==1.5.3
